@@ -475,7 +475,7 @@ class TRIGAN(GANBase):
         training=False
         consist_x, consist_logits = self._build_classifier(self.input_labeled_x, training=training)
         acc, acc_op = tf.metrics.accuracy(labels=tf.argmax(self.input_labeled_y, 0), predictions=tf.argmax(consist_logits, 0))
-        #tf.summary.scalar('acc', acc)<-FIX THIS
+        tf.summary.scalar('acc', acc)#<-FIX THIS
         return acc
 
     def _build_loss(self, label_strength=1., training=False):
@@ -518,7 +518,7 @@ class TRIGAN(GANBase):
         lossC = lossC_c
         # summaries
         if training:
-            tf.summary.image('fake', fake_x_c)
+            tf.summary.image('fake', fake_x_g)
             tf.summary.image('real', self.input_labeled_x)
             tf.summary.histogram('D_fake', fake_label[:, -1])
             tf.summary.histogram('D_real', real_label[:, -1])
@@ -528,10 +528,12 @@ class TRIGAN(GANBase):
             tf.summary.scalar('lossD', lossD)
             tf.summary.scalar('lossC', lossC)
             tf.summary.scalar('loss', lossG + lossD)
-
+        else:
+            tf.summary.histogram('guessed_labels', consist_logits[:, -1])
+            tf.summary.histogram('real_labels',self.input_labeled_y[:,-1])
         return lossG, lossD, lossC
 
-    def train(self, labeled_x, labeled_y, unlabeled_x, test_x, test_y, n_ptepoch=0, n_epochs=25, n_batch=128,
+    def train(self, labeled_x, labeled_y, unlabeled_x, test_x, test_y, n_ptepoch=0, n_epochs=2, n_batch=128,
               learning_rate=2e-4, label_strength=1.):
 
         # handle data
