@@ -22,9 +22,14 @@ def load_cifar10():
     train,test=keras.datasets.cifar10.load_data()
     train_data,train_label=train[0],train[1]
     test_data,test_label=test[0],test[1]
-    labeled_data,labeled_label=train_data[0:1000,:,:,:],train_label[0:1000]
-    unlabeled_data=train_data[1000:,:,:,:]
+    labeled_data, labeled_label = train_data[0:4000, :, :, :], train_label[0:4000]
+    unlabeled_data = train_data[4000:, :, :, :]
     print(labeled_data.shape)
     return labeled_data,labeled_label,unlabeled_data,test_data,test_label
 if __name__=='__main__':
-    load_cifar10()
+    import collections
+    import numpy as np
+
+    labeled_data, labeled_label, unlabeled_data, test_data, test_label = load_cifar10()
+    print(labeled_label.shape)
+    print(collections.Counter(labeled_label.flatten()))

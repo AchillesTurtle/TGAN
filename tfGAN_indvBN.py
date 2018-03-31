@@ -57,8 +57,8 @@ class GANBase (object):
         # parameters
         self.n_noise = 100
         self.n_pixel = 32
-        self.n_channel = 1
-        if mask.dtype is not bool:
+        self.n_channel = 3
+        if mask is None or mask.dtype is not bool:
             self.mask = np.ones(self.n_pixel * self.n_pixel, dtype=bool)
             self.mask[mask] = False
         else:
@@ -81,7 +81,7 @@ class GANBase (object):
         # network variables
         self.batch_ind = tf.placeholder(tf.int32, 0, 'batch_ind')
         self.batch_size = tf.placeholder(tf.int32, 0, 'batch_size')
-        self.training = tf.placeholder(tf.bool, 0, 'training')
+        self.training = tf.placeholder(tf.bool, None, 'training')
         self.input_x = tf.placeholder(tf.float32, (None, self.n_pixel, self.n_pixel, self.n_channel), 'image')
         self.input_n = tf.placeholder(tf.float32, (None, self.n_noise), 'noise')
         # self.input_x = tf.Variable(self.input_x_ph, trainable=False, collections=[])
@@ -123,14 +123,14 @@ class GANBase (object):
                                                                   name='conv'), name='bn'))
 
             # upscaling layers
-            while csize < self.n_pixel/2:
+            while csize < self.n_pixel // 2:
                 with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt/2)):
-                    tensor = tf.nn.relu(bn(tf.layers.conv2d_transpose(tensor, nfilt/2, 4, 2, 'same',
+                    tensor = tf.nn.relu(bn(tf.layers.conv2d_transpose(tensor, nfilt // 2, 4, 2, 'same',
                                                                       use_bias=not batch_norm,
                                                                       kernel_initializer=init_normal(),
                                                                       name='conv'), name='bn'))
                 csize *= 2
-                nfilt /= 2
+                nfilt //= 2
 
             # extra layers
             for it in range(self.n_extra_generator_layers):
@@ -282,7 +282,7 @@ class DCGAN (GANBase):
 
         return lossG, lossD
 
-    def train(self, trainx, testx, n_epochs=25, n_batch=128, learning_rate=2e-4, label_strength=1.):
+    def train(self, trainx, testx, n_epochs=4, n_batch=128, learning_rate=2e-4, label_strength=1.):
 
         # handle data
         n_train = trainx.shape[0]
