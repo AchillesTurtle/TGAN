@@ -2,6 +2,7 @@ from tfGAN_indvBN import batcher, safe_log
 import tensorflow as tf
 import numpy as np
 import math
+import nn as weightnorm
 from os import sep, getcwd
 from time import time
 from os.path import join, exists
@@ -100,98 +101,6 @@ class GANBase(object):
         # etc
         self.session = None
 
-    def _build_generator_base(self, tensor=None, training=False, batch_norm=None):
-        assert self.n_pixel % 16 == 0, "isize has to be a multiple of 16"
-        nfilt = 2000
-        csize = 4
-        if tensor is None:
-            tensor = self.input_z_g
-        if batch_norm is None:
-            batch_norm = self.batch_norm_G
-        if batch_norm:
-            def bn(x, name=None):
-                return tf.contrib.layers.batch_norm(x, is_training=training,
-                                                    renorm=BATCH_RENORM, decay=BATCH_NORM_DECAY)
-        else:
-            bn = tf.identity
-
-        with tf.variable_scope('generator') as scope:
-            # set reuse if necessary
-            if tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope.name):
-                scope.reuse_variables()
-
-            # initial layer
-            with tf.variable_scope('initial.{0}-{1}'.format(self.n_noise, nfilt)):
-                tensor = tf.nn.relu(bn(tf.layers.conv2d_transpose(tf.reshape(tensor, [-1, 1, 1, self.n_noise]),
-                                                                  nfilt, 4, 2, 'valid', use_bias=not batch_norm,
-                                                                  kernel_initializer=init_normal(),
-                                                                  name='conv'), name='bn'))
-
-            # upscaling layers
-            while csize < self.n_pixel / 2:
-                with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt / 2)):
-                    tensor = tf.nn.relu(bn(tf.layers.conv2d_transpose(tensor, nfilt / 2, 4, 2, 'same',
-                                                                      use_bias=not batch_norm,
-                                                                      kernel_initializer=init_normal(),
-                                                                      name='conv'), name='bn'))
-                csize *= 2
-                nfilt /= 2
-
-            # extra layers
-            for it in range(self.n_extra_generator_layers):
-                with tf.variable_scope('extra-{0}.{1}'.format(it, nfilt)):
-                    tensor = tf.nn.relu(
-                        bn(tf.layers.conv2d_transpose(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                      kernel_initializer=init_normal(),
-                                                      name='conv'), name='bn'))
-            # final layer
-            with tf.variable_scope('final.{0}-{1}'.format(nfilt, self.n_channel)):
-                tensor = tf.layers.conv2d_transpose(tensor, self.n_channel, 4, 2, 'same', activation=tf.tanh,
-                                                    kernel_initializer=init_normal(),
-                                                    name='conv')
-
-            # removed mask layer
-            return tensor
-
-    def _build_discriminator_base(self, tensor=None, training=False, batch_norm=None):
-        nfilt = 500
-        if tensor is None:
-            tensor = self.input_x
-        if batch_norm is None:
-            batch_norm = self.batch_norm_D
-        if batch_norm:
-            def bn(tensor, name=None):
-                return tf.contrib.layers.batch_norm(tensor, is_training=training,
-                                                    renorm=BATCH_RENORM, decay=BATCH_NORM_DECAY)
-        else:
-            bn = tf.identity
-
-        # initial layer
-        with tf.variable_scope('initial.{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 4, 2, 'same', use_bias=not batch_norm,
-                                               kernel_initializer=init_normal(),
-                                               name='conv'), name='bn'))
-        nfilt /= 2
-        csize = self.n_pixel / 2
-
-        # extra layers
-        for it in range(self.n_extra_discriminator_layers):
-            with tf.variable_scope('extra-{0}.{1}'.format(it, nfilt)):
-                tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                   kernel_initializer=init_normal(),
-                                                   name='conv'), name='bn'))
-
-        # downscaling layers
-        while csize > 4:
-            with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt * 2)):
-                tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt * 2, 4, 2, 'same', use_bias=not batch_norm,
-                                                   kernel_initializer=init_normal(),
-                                                   name='conv'), name='bn'))
-            nfilt *= 2
-            csize /= 2
-
-        return tensor
-
     def _build_loss(self, label_strength=1.):
         raise NotImplementedError
 
@@ -236,8 +145,8 @@ class TRIGAN(GANBase):
     """NEW"""
 
     # built from build_discriminator_base
-    # from triple gan paper, used on svhn
-    def _build_classifier_base(self, tensor=None, training=False, batch_norm=None):
+    # from triple gan paper, used on cifar10
+    def _build_classifier_base(self, tensor=None, training=False, batch_norm=None, init=False):
         nfilt = 128
         if tensor is None:
             tensor = self.input_x_c
@@ -261,9 +170,7 @@ class TRIGAN(GANBase):
         # initial layer
         for it in range(2):
             with tf.variable_scope('first_part-{0}.{1}-{2}'.format(it, self.n_channel, nfilt)):
-                tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                   kernel_initializer=init_normal(),
-                                                   name='conv'), name='bn'), a=0.1)
+                tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'same', init=init), a=0.1)
         with tf.variable_scope('first_part-last{0}-{1}'.format(self.n_channel, nfilt)):
             tensor = do(lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 2, 'same', use_bias=not batch_norm,
                                                   kernel_initializer=init_normal(),
@@ -299,27 +206,9 @@ class TRIGAN(GANBase):
             tensor = tf.reduce_mean(tensor, [1, 2], name='rm')
             tensor = lrelu(tf.layers.dense(tensor, self.n_class))
 
-        # csize = self.n_pixel / 2
-
-        # extra layers
-        # for it in range(self.n_extra_discriminator_layers):
-        #    with tf.variable_scope('extra-{0}.{1}'.format(it, nfilt)):
-        #        tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-        #                                           kernel_initializer=init_normal(),
-        #                                           name='conv'), name='bn'))
-
-        # downscaling layers
-        # while csize > 4:
-        #    with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt * 2)):
-        #        tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt * 2, 4, 2, 'same', use_bias=not batch_norm,
-        #                                           kernel_initializer=init_normal(),
-        #                                           name='conv'), name='bn'))
-        #    nfilt *= 2
-        #    csize /= 2
-
         return tensor
 
-    def _build_classifier(self, tensor=None, training=False):
+    def _build_classifier(self, tensor=None, training=False, init=False):
         if tensor is not None:
             input = tensor
         else:
@@ -330,7 +219,7 @@ class TRIGAN(GANBase):
                 scope.reuse_variables()
 
             # classifier base
-            tensor = self._build_classifier_base(tensor, training)
+            tensor = self._build_classifier_base(tensor, training, init=init)
 
             # final layer
             d_out = self.n_class
@@ -339,7 +228,7 @@ class TRIGAN(GANBase):
 
         return input, out_logits
 
-    def _build_generator(self, tensor=None, label=None, training=False, batch_norm=None):
+    def _build_generator(self, tensor=None, label=None, training=False, batch_norm=None, init=False):
 
         assert self.n_pixel % 16 == 0, "isize has to be a multiple of 16"
         nfilt = 512
@@ -370,7 +259,6 @@ class TRIGAN(GANBase):
                                                     renorm=BATCH_RENORM, decay=BATCH_NORM_DECAY)
         else:
             # return the same if bn is not aactivated
-            print("batch_norm_G is false")
             bn = tf.identity
         with tf.variable_scope('generator') as scope:
             # set reuse if necessary
@@ -404,9 +292,8 @@ class TRIGAN(GANBase):
 
             # final layer
             with tf.variable_scope('final.{0}-{1}'.format(nfilt, self.n_channel)):
-                tensor = tf.layers.conv2d_transpose(tensor, self.n_channel, 5, 2, 'same', activation=tf.tanh,
-                                                    kernel_initializer=init_normal(0.05),
-                                                    name='conv')
+                tensor = weightnorm.deconv2d(tensor, self.n_channel, [5, 5], [2, 2], 'SAME', init=init,
+                                             nonlinearity=tf.tanh)
 
                 # removed mask layer
         return tensor, label
@@ -414,7 +301,7 @@ class TRIGAN(GANBase):
     '''----END----'''
 
     # implementing discriminator with labels(not on every layer)
-    def _build_discriminator(self, tensor=None, label=None, training=False, batch_norm=None):
+    def _build_discriminator(self, tensor=None, label=None, training=False, batch_norm=None, init=False):
         with tf.variable_scope('discriminator') as scope:
             # set reuse if necessary
             if tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope.name):
@@ -504,6 +391,13 @@ class TRIGAN(GANBase):
         tf.summary.scalar('acc', acc_op)
         return acc_op
 
+    def _init_vars(self):
+        _, initG = self._build_generator(init=True)
+        _, initD = self._build_discriminator(init=True)
+        _, initC = self._build_classifier(init=True)
+
+        return initG, initD, initC
+
     def _build_loss(self, label_strength=1., training=False):
         # input  labels, get fake data (x_g,y_g)
         fake_x_g, fake_y_g = self._build_generator(
@@ -589,6 +483,7 @@ class TRIGAN(GANBase):
         # train_batch = tf.train.shuffle_batch([train], n_batch, 50000, 10000, 2,
         #                                      enqueue_many=True, allow_smaller_final_batch=True, name='batch')
         global_step = tf.train.get_or_create_global_step(graph=None)
+        initG, initD, initC = self._init_vars()
         lossG, lossD, lossC = self._build_loss(label_strength=label_strength, training=True)
         evalG, evalD, evalC = self._build_loss(label_strength=label_strength)
         accC = self._build_metrics()
@@ -632,6 +527,18 @@ class TRIGAN(GANBase):
             # sess.run(self.input_x.initializer, {self.input_x_ph: trainx})
             # sess.run(self.input_x.initializer, {self.input_x_ph: trainx})
 
+            # init
+            sess.run([initG, initD, initC], {self.input_labeled_x: labeled_x[0:n_batch],
+                                             self.input_labeled_y: get_one_hot(labeled_y[
+                                                                               0:n_batch],
+                                                                               self.n_class),
+                                             self.input_x_c: unlabeled_x[0:n_batch],
+                                             self.input_z_g: np.random.randn(n_batch,
+                                                                             self.n_noise).astype(np.float32),
+                                             self.input_y_g: get_one_hot(
+                                                 np.repeat(np.arange(self.n_class),
+                                                           max(1, round(n_batch / self.n_class))),
+                                                 depth=self.n_class)})
             # train
             self._start_logging_and_saving(sess)
             for epoch in range(n_epochs):
