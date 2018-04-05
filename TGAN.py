@@ -348,16 +348,20 @@ class TRIGAN(GANBase):
             # downscaling layers
             while csize > 4:
                 with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt * 2)):
+                    tensor = convconcatlayer(tensor, label)
                     tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'same', init=init))
                 with tf.variable_scope('pyramid2.{0}-{1}'.format(nfilt, nfilt * 2)):
+                    tensor = convconcatlayer(tensor, label)
                     tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 2, 'same', init=init))
                     tensor = do(tensor, rate=0.8, name='do')
                 nfilt *= 2
                 csize /= 2
 
             with tf.variable_scope('pyramid.{0}-global'.format(nfilt)):
+                tensor = convconcatlayer(tensor, label)
                 tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'valid', init=init))
             with tf.variable_scope('pyramid2.{0}-global'.format(nfilt)):
+                tensor = convconcatlayer(tensor, label)
                 tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'valid', init=init))
             # final layer
             d_out = 2
