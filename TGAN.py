@@ -12,6 +12,19 @@ BATCH_NORM_DECAY = 0.999
 BATCH_RENORM = False
 
 
+def convconcatlayer(tensor, vector):
+    # Warning: didn't do any shape checking
+    x_shape = tensor.get_shape()
+    y_shape = vector.get_shape()
+    tiled_vector = tf.tile(tf.reshape(vector, [-1, 1, 1, y_shape[1]]), [1, x_shape[1], x_shape[2], 1])
+    tensor = tf.concat([tensor, tiled_vector], axis=3)
+    return tensor
+
+
+def gaussian_noise(input_layer, std):
+    noise = tf.random_normal(shape=tf.shape(input_layer), mean=0.0, stddev=std, dtype=tf.float32)
+    return input_layer + noise
+
 def get_one_hot(targets, depth):
     return np.eye(depth)[np.array(targets).reshape(-1)]
 
@@ -164,43 +177,33 @@ class TRIGAN(GANBase):
             return tf.contrib.layers.dropout(tensor, keep_prob=rate, is_training=training)
 
         # dropout before layers
-        with tf.variable_scope('initial_dropout{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = tf.layers.dropout(tensor, rate=0.2, training=training, seed=self.seed)
+        # with tf.variable_scope('initial_dropout{0}-{1}'.format(self.n_channel, nfilt)):
+        #    tensor = tf.layers.dropout(tensor, rate=0.2, training=training, seed=self.seed)
 
+        with tf.variable_scope('gaussian_noise{0}-{1}'.format(self.n_channel, nfilt)):
+            tensor = gaussian_noise(tensor, 0.15)
         # initial layer
         for it in range(2):
             with tf.variable_scope('first_part-{0}.{1}-{2}'.format(it, self.n_channel, nfilt)):
                 tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'same', init=init), a=0.1)
         with tf.variable_scope('first_part-last{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = do(lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 2, 'same', use_bias=not batch_norm,
-                                                  kernel_initializer=init_normal(),
-                                                  name='conv'), name='bn'), a=0.1), rate=0.5, name='do')
+            tensor = do(lrelu(weightnorm.conv2d(tensor, nfilt, 3, 2, 'same', init=init), a=0.1), rate=0.5, name='do')
 
         nfilt = 256
         for it in range(2):
             with tf.variable_scope('second_part-{0}.{1}-{2}'.format(it, self.n_channel, nfilt)):
-                tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                   kernel_initializer=init_normal(),
-                                                   name='conv'), name='bn'), a=0.1)
+                tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'same', init=init), a=0.1)
         with tf.variable_scope('second_part-last{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = do(lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 2, 'same', use_bias=not batch_norm,
-                                                  kernel_initializer=init_normal(),
-                                                  name='conv'), name='bn'), a=0.1), rate=0.5, name='do')
+            tensor = do(lrelu(weightnorm.conv2d(tensor, nfilt, 3, 2, 'same', init=init), a=0.1), rate=0.5, name='do')
         nfilt = 512
         with tf.variable_scope('third_part{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'valid', use_bias=not batch_norm,
-                                               kernel_initializer=init_normal(),
-                                               name='conv'), name='bn'), a=0.1)
+            tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'valid', init=init), a=0.1)
         nfilt = 256
         with tf.variable_scope('third_part{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 1, 1, 'valid', use_bias=not batch_norm,
-                                               kernel_initializer=init_normal(),
-                                               name='conv'), name='bn'), a=0.1)
+            tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 1, 1, 'valid', init=init), a=0.1)
         nfilt = 128
         with tf.variable_scope('third_part{0}-{1}'.format(self.n_channel, nfilt)):
-            tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 1, 1, 'valid', use_bias=not batch_norm,
-                                               kernel_initializer=init_normal(),
-                                               name='conv'), name='bn'), a=0.1)
+            tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 1, 1, 'valid', init=init), a=0.1)
 
         with tf.variable_scope('last_layer{0}-{1}'.format(self.n_channel, nfilt)):
             tensor = tf.reduce_mean(tensor, [1, 2], name='rm')
@@ -275,20 +278,13 @@ class TRIGAN(GANBase):
             # upscaling layers
             while csize < self.n_pixel / 2:
                 with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt // 2)):
+                    tensor = convconcatlayer(tensor, label)
                     tensor = tf.nn.relu(bn(tf.layers.conv2d_transpose(tensor, nfilt // 2, 5, 2, 'same',
                                                                       use_bias=not batch_norm,
                                                                       kernel_initializer=init_normal(0.05),
                                                                       name='conv'), name='bn'))
                 csize *= 2
                 nfilt //= 2
-
-            # extra layers
-            for it in range(self.n_extra_generator_layers):
-                with tf.variable_scope('extra-{0}.{1}'.format(it, nfilt)):
-                    tensor = tf.nn.relu(
-                        bn(tf.layers.conv2d_transpose(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                      kernel_initializer=init_normal(0.05),
-                                                      name='conv'), name='bn'))
 
             # final layer
             with tf.variable_scope('final.{0}-{1}'.format(nfilt, self.n_channel)):
@@ -347,32 +343,22 @@ class TRIGAN(GANBase):
             # extra layers
             for it in range(self.n_extra_discriminator_layers):
                 with tf.variable_scope('extra-{0}.{1}'.format(it, nfilt)):
-                    tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                       kernel_initializer=init_normal(0.05),
-                                                       name='conv'), name='bn'))
+                    tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'same', init=init))
 
             # downscaling layers
             while csize > 4:
                 with tf.variable_scope('pyramid.{0}-{1}'.format(nfilt, nfilt * 2)):
-                    tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'same', use_bias=not batch_norm,
-                                                       kernel_initializer=init_normal(0.05),
-                                                       name='conv'), name='bn'))
+                    tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'same', init=init))
                 with tf.variable_scope('pyramid2.{0}-{1}'.format(nfilt, nfilt * 2)):
-                    tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 2, 'same', use_bias=not batch_norm,
-                                                       kernel_initializer=init_normal(0.05),
-                                                       name='conv'), name='bn'))
+                    tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 2, 'same', init=init))
                     tensor = do(tensor, rate=0.8, name='do')
                 nfilt *= 2
                 csize /= 2
 
             with tf.variable_scope('pyramid.{0}-global'.format(nfilt)):
-                tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'valid', use_bias=not batch_norm,
-                                                   kernel_initializer=init_normal(0.05),
-                                                   name='conv'), name='bn'))
+                tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'valid', init=init))
             with tf.variable_scope('pyramid2.{0}-global'.format(nfilt)):
-                tensor = lrelu(bn(tf.layers.conv2d(tensor, nfilt, 3, 1, 'valid', use_bias=not batch_norm,
-                                                   kernel_initializer=init_normal(0.05),
-                                                   name='conv'), name='bn'))
+                tensor = lrelu(weightnorm.conv2d(tensor, nfilt, 3, 1, 'valid', init=init))
             # final layer
             d_out = 2
             with tf.variable_scope('final.{0}-{1}'.format(tensor.shape[-1], d_out)):
@@ -557,9 +543,6 @@ class TRIGAN(GANBase):
                         else:
                             labeled_bi, labeled_nba = next(labeled_generator)
                     n += n_batch_actual
-                    # self._log(summary, step)
-                    # print 'epoch {:d}/{:d} (part {:d}D):  training loss: {:f} (G: {:f}  D: {:f})  time: {:d} seconds'\
-                    #     .format(epoch, n_epochs, n, (lg + ld)/n, lg/n, ld/n, int(time() - start))
                     # generator
                     # update all
                     feed = {self.input_labeled_x: labeled_x[labeled_bi:labeled_bi + labeled_nba],
